@@ -8,8 +8,14 @@ app.get("/", (_, res) => res.status(200).send("OK"));
 // ---- ENV
 const GOOGLE_LEAD_KEY = process.env.GOOGLE_LEAD_KEY || "";
 const IKS_TOKEN = process.env.IKS_TOKEN || "";
-const LOCATION_QUESTION_COL_ID = "your_preferred_option"; // keep this exact
+
+// Keep this exact unless you rename the question in Google
+const LOCATION_QUESTION_COL_ID = "your_preferred_option";
+
+// Your desired IKS source value
 const SOURCE_VALUE = (process.env.SOURCE_VALUE || "Google Ads - Tanner").trim();
+// Force using SOURCE_VALUE even if not listed in IKS config
+const FORCE_SOURCE = (process.env.FORCE_SOURCE || "true").toLowerCase() === "true";
 
 const IKS_BASE = "https://api.intellikidsystems.com/api/v2";
 
@@ -38,6 +44,7 @@ const splitName = (full="") => {
 function chooseLocationIdByText(t="") {
   const s = (t||"").toLowerCase();
   if (!s) return null;
+  // simple scorer
   const scoreFor = n => {
     const a = (n||"").toLowerCase();
     let sc = 0;
@@ -56,11 +63,12 @@ function chooseLocationIdByText(t="") {
     const sc = scoreFor(loc.name);
     if (sc > bestScore) { best = loc; bestScore = sc; }
   }
-  return best ? String(best.id) : null; // <-- KEEP AS STRING
+  // IMPORTANT: return as STRING to avoid JS integer rounding
+  return best ? String(best.id) : null;
 }
 
-// debug
-app.get("/debug-config", async (_req,res)=>{ try{ await ensureConfig(); res.json({locations:LIVE_LOCATIONS,sources:LIVE_SOURCES}); }catch(e){ res.status(500).json({error:e.message,detail:e?.response?.data}); }});
+// debug route (optional)
+// app.get("/debug-config", async (_req,res)=>{ try{ await ensureConfig(); res.json({locations:LIVE_LOCATIONS,sources:LIVE_SOURCES}); }catch(e){ res.status(500).json({error:e.message,detail:e?.response?.data}); }});
 app.get("/", (_req,res)=>res.status(200).send("OK – webhook up"));
 
 app.post("/google-leads", async (req, res) => {
@@ -76,25 +84,29 @@ app.post("/google-leads", async (req, res) => {
     const email = c.EMAIL || "";
     const phone = c.PHONE_NUMBER || "";
 
-    // Google answer (your preferred option)
+    // Your Preferred Option (exact column id)
     const answer = c[LOCATION_QUESTION_COL_ID] || "";
-    // Resolve to a valid IKS location ID (STRING!)
+
+    // Resolve a valid IKS location ID (STRING!)
     let locationId = chooseLocationIdByText(answer);
     if (!locationId && LIVE_LOCATIONS.length) locationId = String(LIVE_LOCATIONS[0].id);
 
-    // Source must be allowed; fall back to first
-    const source = LIVE_SOURCES.includes(SOURCE_VALUE) ? SOURCE_VALUE : (LIVE_SOURCES[0] || "Google");
+    // Source selection
+    let source = SOURCE_VALUE;
+    if (!FORCE_SOURCE) {
+      source = LIVE_SOURCES.includes(SOURCE_VALUE) ? SOURCE_VALUE : (LIVE_SOURCES[0] || "Google");
+    }
 
-    // MINIMAL, safe payload — SEND IDS AS STRINGS (no Number())
+    // Minimal, safe payload — location as STRING
     const lead = {
       first_name: first,
       last_name:  last,
       ...(phone ? { phone } : {}),
       ...(email ? { email } : {}),
       source,
-      location_id: locationId,  // <-- STRING
-      location:    locationId,  // <-- STRING (for picky tenants)
-      locations_select: answer  // store the friendly label too
+      location_id: locationId,       // keep as string
+      location:    locationId,       // some tenants require this
+      locations_select: answer       // store the friendly label too
     };
 
     const qs = new URLSearchParams();
