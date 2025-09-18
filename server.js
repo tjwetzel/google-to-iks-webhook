@@ -1,3 +1,4 @@
+
 const express = require("express");
 const axios = require("axios");
 
@@ -39,4 +40,65 @@ function pickLocationId({locationAnswer,campaignName,campaignId,cityText}) {
   const byAnswer = textToLocationKey(locationAnswer); if (byAnswer) return LOCATIONS[byAnswer];
   const byName = textToLocationKey(campaignName);     if (byName)   return LOCATIONS[byName];
   const mappedKey = CAMPAIGN_MAP[String(campaignId)]; if (mappedKey && LOCATIONS[mappedKey]) return LOCATIONS[mappedKey];
-  const byCity = textToLocationKey(cityText);         if
+  const byCity = textToLocationKey(cityText);         if (byCity)   return LOCATIONS[byCity];
+  return LOCATIONS.phoenix;
+}
+
+// ---------- webhook ----------
+app.post("/google-leads", async (req, res) => {
+  try {
+    if (req.body.google_key !== GOOGLE_LEAD_KEY) return res.status(403).json({ message: "Invalid google_key" });
+
+    const formId      = req.body.form_id;
+    const campaignId  = req.body.campaign_id;
+    const campaignName= req.body.campaign_name || "";   // Google may not send this; safe if empty
+    const adGroupId   = req.body.adgroup_id;
+
+    const col = columnsToObj(req.body.user_column_data || []);
+    const fullName   = col.FULL_NAME || "";
+    const first      = col.FIRST_NAME || fullName.split(" ")[0] || "";
+    const last       = col.LAST_NAME  || fullName.replace(/^(\S+)\s*/, "") || "";
+    const email      = col.EMAIL || "";
+    const phone      = col.PHONE_NUMBER || "";
+    const city       = col.CITY || "";
+    const postalCode = col.POSTAL_CODE || "";
+    const jobTitle   = col.JOB_TITLE || "";
+    const gclid      = req.body.gcl_id || "";
+    const locationAnswer = LOCATION_QUESTION_COL_ID ? (col[LOCATION_QUESTION_COL_ID] || "") : "";
+
+    const locationIdStr = pickLocationId({ locationAnswer, campaignName, campaignId, cityText: city });
+    const locationIdNum = Number(locationIdStr);
+
+    const lead = {
+      first_name: first || undefined,
+      last_name:  last  || undefined,
+      email:      email || undefined,
+      phone:      phone || undefined,
+      city:       city  || undefined,
+      postal_code: postalCode || undefined,
+      job_title:  jobTitle || undefined,
+      source:     "Google Ads Lead Form",
+      location_id: locationIdNum,
+      gclid:      gclid || undefined,
+      notes: `GA lead_id:${req.body.lead_id||"n/a"}; form_id:${formId}; campaign_id:${campaignId}; adgroup_id:${adGroupId}; campaign_name:${campaignName}`
+    };
+
+    console.log("Routing to location_id:", locationIdNum);
+    console.log("Payload to IKS:", JSON.stringify({ lead }));
+
+    // Send via simplified endpoint (form-data)
+    const qs = new URLSearchParams();
+    for (const [k,v] of Object.entries(lead)) if (v!==undefined && v!==null && v!=="") qs.append(k, String(v));
+    await axios.post(`${IKS_BASE}/lead/simplified`, qs.toString(), {
+      headers: { Authorization: `Bearer ${IKS_TOKEN}`, "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 15000
+    });
+
+    return res.status(200).json({});
+  } catch (e) {
+    console.error("IKS forward failed:", e?.response?.status, e?.response?.data || e.message);
+    return res.status(502).json({ message: "Upstream error" });
+  }
+});
+
+app.listen(process.env.PORT || 3000, () => console.log("Webhook listening"));
