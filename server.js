@@ -1,4 +1,3 @@
-
 const express = require("express");
 const axios = require("axios");
 
@@ -6,12 +5,18 @@ const app = express();
 app.use(express.json({ type: "*/*" }));
 app.get("/", (_, res) => res.status(200).send("OK"));
 
-// ---------- ENV (Render → Environment) ----------
+// ---------- ENV ----------
 const GOOGLE_LEAD_KEY = process.env.GOOGLE_LEAD_KEY || "";
 const IKS_TOKEN = process.env.IKS_TOKEN || "";
-const LOCATION_QUESTION_COL_ID = process.env.LOCATION_QUESTION_COL_ID || ""; // e.g. which_location_are_you_interested_in?
+const LOCATION_QUESTION_COL_ID = process.env.LOCATION_QUESTION_COL_ID || ""; // should be "your_preferred_option"
 let CAMPAIGN_MAP = {};
 try { CAMPAIGN_MAP = JSON.parse(process.env.CAMPAIGN_MAP_JSON || "{}"); } catch { CAMPAIGN_MAP = {}; }
+
+// Log what we loaded so you can verify in Render logs
+console.log("ENV check:", {
+  LOCATION_QUESTION_COL_ID,
+  CAMPAIGN_MAP_KEYS: Object.keys(CAMPAIGN_MAP).length
+});
 
 // ---------- IKS ----------
 const IKS_BASE = "https://api.intellikidsystems.com/api/v2";
@@ -51,10 +56,12 @@ app.post("/google-leads", async (req, res) => {
 
     const formId      = req.body.form_id;
     const campaignId  = req.body.campaign_id;
-    const campaignName= req.body.campaign_name || "";   // Google may not send this; safe if empty
+    const campaignName= req.body.campaign_name || "";
     const adGroupId   = req.body.adgroup_id;
 
     const col = columnsToObj(req.body.user_column_data || []);
+    console.log("Column IDs present:", Object.keys(col)); // see your_preferred_option here
+
     const fullName   = col.FULL_NAME || "";
     const first      = col.FIRST_NAME || fullName.split(" ")[0] || "";
     const last       = col.LAST_NAME  || fullName.replace(/^(\S+)\s*/, "") || "";
@@ -64,10 +71,14 @@ app.post("/google-leads", async (req, res) => {
     const postalCode = col.POSTAL_CODE || "";
     const jobTitle   = col.JOB_TITLE || "";
     const gclid      = req.body.gcl_id || "";
-    const locationAnswer = LOCATION_QUESTION_COL_ID ? (col[LOCATION_QUESTION_COL_ID] || "") : "";
+
+    const locationAnswer =
+      LOCATION_QUESTION_COL_ID ? (col[LOCATION_QUESTION_COL_ID] || "") : "";
+    console.log("LOCATION_QUESTION_COL_ID:", LOCATION_QUESTION_COL_ID, "locationAnswer:", locationAnswer);
 
     const locationIdStr = pickLocationId({ locationAnswer, campaignName, campaignId, cityText: city });
     const locationIdNum = Number(locationIdStr);
+    console.log("Routing to location_id:", locationIdNum);
 
     const lead = {
       first_name: first || undefined,
@@ -83,10 +94,8 @@ app.post("/google-leads", async (req, res) => {
       notes: `GA lead_id:${req.body.lead_id||"n/a"}; form_id:${formId}; campaign_id:${campaignId}; adgroup_id:${adGroupId}; campaign_name:${campaignName}`
     };
 
-    console.log("Routing to location_id:", locationIdNum);
     console.log("Payload to IKS:", JSON.stringify({ lead }));
 
-    // Send via simplified endpoint (form-data)
     const qs = new URLSearchParams();
     for (const [k,v] of Object.entries(lead)) if (v!==undefined && v!==null && v!=="") qs.append(k, String(v));
     await axios.post(`${IKS_BASE}/lead/simplified`, qs.toString(), {
