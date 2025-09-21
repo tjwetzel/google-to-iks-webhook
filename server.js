@@ -10,26 +10,30 @@ const axios = require("axios");
 
 const app = express();
 
-// --- Body parsers: accept JSON and x-www-form-urlencoded (Duda uses this)
+// Body parsers
 app.use(express.json());                         // application/json
 app.use(express.urlencoded({ extended: true })); // application/x-www-form-urlencoded
 
-// --- Healthcheck
+// Healthcheck
 app.get("/", (_req, res) => res.status(200).send("OK – webhook up"));
 
-// ==== ENV ====================================================================
-const GOOGLE_LEAD_KEY = process.env.GOOGLE_LEAD_KEY || "";      // shared key for /google-leads
-const IKS_TOKEN       = process.env.IKS_TOKEN || "";             // Bearer token for Intellikids
+// ===== ENV (set these in Render) =============================================
+// GOOGLE_LEAD_KEY = some-secret-key
+// IKS_TOKEN       = <your Intellikids API token>
+// SOURCE_VALUE    = Google Ads - Tanner
+// FORCE_SOURCE    = true
+const GOOGLE_LEAD_KEY = process.env.GOOGLE_LEAD_KEY || "";
+const IKS_TOKEN       = process.env.IKS_TOKEN || "";
 const SOURCE_VALUE    = (process.env.SOURCE_VALUE || "Google Ads - Tanner").trim();
 const FORCE_SOURCE    = (process.env.FORCE_SOURCE || "true").toLowerCase() === "true";
 
-// If you kept the Google lead question id for location (not needed by Duda)
+// Google Lead Form location question ID
 const LOCATION_QUESTION_COL_ID = "your_preferred_option";
 
-// IKS base
+// Intellikids API base
 const IKS_BASE = "https://api.intellikidsystems.com/api/v2";
 
-// ==== Live IKS config (tenant-specific locations/sources) =====================
+// ===== Live IKS config =======================================================
 let LIVE_LOCATIONS = [];
 let LIVE_SOURCES   = [];
 
@@ -46,26 +50,22 @@ async function loadConfig() {
     sources: LIVE_SOURCES
   });
 }
-
 async function ensureConfig() {
   if (!LIVE_LOCATIONS.length || !LIVE_SOURCES.length) await loadConfig();
 }
 
-// ==== Helpers =================================================================
+// ===== Helpers ===============================================================
 const cols = (a = []) => a.reduce((o, c) => (o[c.column_id] = c.string_value, o), {});
 
 const splitName = (full = "") => {
-  const p = full.trim().split(/\s+/);
-  return {
-    first: p[0] || "Lead",
-    last: p.slice(1).join(" ") || "From Website"
-  };
+  const p = String(full || "").trim().split(/\s+/);
+  return { first: p[0] || "Lead", last: p.slice(1).join(" ") || "From Website" };
 };
 
 const toE164 = (raw = "") =>
-  raw.replace(/[^\d+0-9]/g, "").replace(/^1?(\d{10})$/, "+1$1");
+  String(raw || "").replace(/[^\d+0-9]/g, "").replace(/^1?(\d{10})$/, "+1$1");
 
-// Scored fuzzy match of location text -> location.id (STRING)
+// Scored fuzzy match of location label -> location.id (STRING)
 function chooseLocationIdByText(t = "") {
   const s = (t || "").toLowerCase();
   if (!s) return null;
@@ -73,14 +73,14 @@ function chooseLocationIdByText(t = "") {
   const scoreFor = n => {
     const a = (n || "").toLowerCase();
     let sc = 0;
-    if (s.includes("32nd")) sc += a.includes("32nd") ? 10 : 0;
-    if (s.includes("moon")) sc += a.includes("moon") ? 5 : 0;
-    if (s.includes("valley")) sc += a.includes("valley") ? 5 : 0;
-    if (s.includes("midtown")) sc += a.includes("midtown") ? 6 : 0;
-    if (s.includes("ahwatukee")) sc += a.includes("ahwatukee") ? 6 : 0;
-    if (s.includes("mesa")) sc += a.includes("mesa") ? 6 : 0;
-    if (s.includes("scottsdale")) sc += a.includes("scottsdale") ? 6 : 0;
-    if (s.includes("phoenix")) sc += a.includes("phoenix") ? 2 : 0;
+    if (s.includes("ahwatukee")) sc += a.includes("ahwatukee") ? 20 : 0;
+    if (s.includes("midtown")) sc += a.includes("midtown") ? 18 : 0;
+    if (s.includes("moon")) sc += a.includes("moon") ? 16 : 0;
+    if (s.includes("mesa")) sc += a.includes("mesa") ? 14 : 0;
+    if (s.includes("scottsdale")) sc += a.includes("scottsdale") ? 12 : 0;
+    if (s.includes("phoenix")) sc += a.includes("phoenix") ? 10 : 0;
+    if (s.includes("valley")) sc += a.includes("valley") ? 6 : 0;
+    if (s.includes("32nd")) sc += a.includes("32nd") ? 6 : 0;
     return sc;
   };
 
@@ -89,17 +89,17 @@ function chooseLocationIdByText(t = "") {
     const sc = scoreFor(loc.name);
     if (sc > bestScore) { best = loc; bestScore = sc; }
   }
-  return best ? String(best.id) : null; // keep as STRING
+  return best ? String(best.id) : null;
 }
 
-// ==== Debug echo ==============================================================
+// Debug echo
 app.post("/echo", (req, res) => {
   console.log("ECHO headers:", req.headers);
   console.log("ECHO body:", req.body);
   res.status(200).json({ ok: true });
 });
 
-// ==== Route: Google Lead Forms -> Intellikids =================================
+// ===== Route: Google Lead Forms =============================================
 app.post("/google-leads", async (req, res) => {
   try {
     if (req.body.google_key !== GOOGLE_LEAD_KEY) {
@@ -112,13 +112,11 @@ app.post("/google-leads", async (req, res) => {
     const full  = c.FULL_NAME || "";
     const email = c.EMAIL || "";
     const phone = c.PHONE_NUMBER || "";
-    const answer = c[LOCATION_QUESTION_COL_ID] || ""; // visible label from the GLF question
+    const answer = c[LOCATION_QUESTION_COL_ID] || "";
 
-    // Resolve location id
     let locationId = chooseLocationIdByText(answer);
     if (!locationId && LIVE_LOCATIONS.length) locationId = String(LIVE_LOCATIONS[0].id);
 
-    // Source handling
     let source = SOURCE_VALUE;
     if (!FORCE_SOURCE) {
       source = LIVE_SOURCES.includes(SOURCE_VALUE) ? SOURCE_VALUE : (LIVE_SOURCES[0] || "Google");
@@ -138,7 +136,7 @@ app.post("/google-leads", async (req, res) => {
     };
 
     const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(lead)) if (v !== undefined && v !== null) qs.append(k, String(v));
+    for (const [k, v] of Object.entries(lead)) if (v) qs.append(k, String(v));
 
     console.log("Posting to IKS (GLF):", qs.toString());
 
@@ -155,32 +153,36 @@ app.post("/google-leads", async (req, res) => {
   }
 });
 
-// ==== Route: Duda Site Form -> Intellikids ====================================
-// Duda generally posts: { formId, pageUrl, date, data: [{label, value}, ...] }
+// ===== Route: Duda Site Form ================================================
+// Supports BOTH shapes:
+// A) Flat keys: {"Name *":"…","Email *":"…","Phone *":"…","Select Location *":"…"}
+// B) Array: { data:[{label:"Name *",value:"…"}, ...], pageUrl:"…" }
 function pickFromDuda(body = {}) {
-  const out = { page_url: body.pageUrl || body.page_url || "" };
-  const arr = Array.isArray(body.data) ? body.data : [];
-
-  const get = (keys) => {
-    const hit = arr.find(f => {
-      const l = (f.label || f.fieldLabel || f.title || "").toLowerCase();
-      return keys.some(k => l.includes(k));
-    });
-    return hit ? (hit.value || f.data || "") : "";
+  const flat = {
+    name:     body["Name *"] || body["Full Name"] || body["Name"] || body.name || "",
+    email:    body["Email *"] || body["Email"] || body.email || "",
+    phone:    body["Phone *"] || body["Phone"] || body.phone || "",
+    location: body["Select Location *"] || body["Location"] || body.location || "",
+    page_url: body.pageUrl || body.page_url || ""
   };
 
-  out.name     = body.name     || get(["name"]);
-  out.email    = body.email    || get(["email"]);
-  out.phone    = body.phone    || get(["phone","tel"]);
-  out.location = body.location || get(["location","campus","school"]);
-  // Optional marketing params if you add hidden fields in Duda later:
-  out.utm_source   = body.utm_source   || "";
-  out.utm_medium   = body.utm_medium   || "";
-  out.utm_campaign = body.utm_campaign || "";
-  out.utm_term     = body.utm_term     || "";
-  out.utm_content  = body.utm_content  || "";
-  out.gclid        = body.gclid        || "";
-  return out;
+  // If flat keys produced values, use them
+  if (flat.name || flat.email || flat.phone || flat.location) return flat;
+
+  // Otherwise, try array format
+  const arr = Array.isArray(body.data) ? body.data : [];
+  const get = (labels) => {
+    const hit = arr.find(f => labels.some(k => (f.label || f.fieldLabel || f.title || "").toLowerCase().includes(k)));
+    return hit ? (hit.value || "") : "";
+  };
+
+  return {
+    name:     get(["name"]),
+    email:    get(["email"]),
+    phone:    get(["phone","tel"]),
+    location: get(["location","campus","school"]),
+    page_url: body.pageUrl || ""
+  };
 }
 
 app.post("/duda-form", async (req, res) => {
@@ -192,13 +194,13 @@ app.post("/duda-form", async (req, res) => {
 
     const b = pickFromDuda(req.body || {});
     const { first, last } = splitName(b.name || "Website Lead");
-    const phone = b.phone ? toE164(b.phone) : "";
+    const phoneE164 = b.phone ? toE164(b.phone) : "";
 
-    // Resolve location id from friendly label
+    // Resolve location id
     let locationId = chooseLocationIdByText(b.location);
     if (!locationId && LIVE_LOCATIONS.length) locationId = String(LIVE_LOCATIONS[0].id);
 
-    // Source handling (re-use same policy)
+    // Source handling
     let source = SOURCE_VALUE;
     if (!FORCE_SOURCE) {
       source = LIVE_SOURCES.includes(SOURCE_VALUE) ? SOURCE_VALUE : (LIVE_SOURCES[0] || "Website");
@@ -207,26 +209,19 @@ app.post("/duda-form", async (req, res) => {
     const lead = {
       first_name: first,
       last_name:  last,
-      ...(phone ? { phone } : {}),
+      ...(phoneE164 ? { phone: phoneE164 } : {}),
       ...(b.email ? { email: b.email } : {}),
       source,
       location_id: locationId,
       location:    locationId,
       locations_select: b.location,
-      notes: JSON.stringify({
-        page_url: b.page_url || "",
-        utm_source: b.utm_source || "",
-        utm_medium: b.utm_medium || "",
-        utm_campaign: b.utm_campaign || "",
-        utm_term: b.utm_term || "",
-        utm_content: b.utm_content || "",
-        gclid: b.gclid || ""
-      })
+      notes: `From Duda | ${b.page_url || ""}`
     };
 
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(lead)) if (v !== undefined && v !== null) qs.append(k, String(v));
 
+    console.log("Resolved -> name:", first, last, "| email:", b.email || "(none)", "| phone:", phoneE164 || "(none)", "| locLabel:", b.location || "(none)", "| locId:", locationId);
     console.log("Posting to IKS (Duda):", qs.toString());
 
     await axios.post(`${IKS_BASE}/lead/simplified`, qs.toString(), {
@@ -242,6 +237,6 @@ app.post("/duda-form", async (req, res) => {
   }
 });
 
-// ==== Start server ============================================================
+// Start server
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("Webhook listening on " + port));
