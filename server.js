@@ -7,12 +7,10 @@
 
 const express = require("express");
 const axios = require("axios");
-const cors = require("cors");
 
 const app = express();
 
 // --- Body parsers: accept JSON and x-www-form-urlencoded (Duda uses this)
-app.use(cors());
 app.use(express.json());                         // application/json
 app.use(express.urlencoded({ extended: true })); // application/x-www-form-urlencoded
 
@@ -20,7 +18,6 @@ app.use(express.urlencoded({ extended: true })); // application/x-www-form-urlen
 app.get("/", (_req, res) => res.status(200).send("OK – webhook up"));
 
 // ==== ENV ====================================================================
-// Set these in Render "Environment" panel
 const GOOGLE_LEAD_KEY = process.env.GOOGLE_LEAD_KEY || "";      // shared key for /google-leads
 const IKS_TOKEN       = process.env.IKS_TOKEN || "";             // Bearer token for Intellikids
 const SOURCE_VALUE    = (process.env.SOURCE_VALUE || "Google Ads - Tanner").trim();
@@ -216,7 +213,6 @@ app.post("/duda-form", async (req, res) => {
       location_id: locationId,
       location:    locationId,
       locations_select: b.location,
-      // If your tenant supports "notes" this is useful for UTMs and page source
       notes: JSON.stringify({
         page_url: b.page_url || "",
         utm_source: b.utm_source || "",
