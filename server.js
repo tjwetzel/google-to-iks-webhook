@@ -128,3 +128,61 @@ app.post("/google-leads", async (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Webhook listening"));
+
+// Normalize Duda form submission
+function pickFromDuda(body = {}) {
+  const arr = Array.isArray(body.data) ? body.data : [];
+  const get = (label) => {
+    const hit = arr.find(f => (f.label || "").toLowerCase().includes(label));
+    return hit ? hit.value : "";
+  };
+  return {
+    name: body.name || get("name"),
+    email: body.email || get("email"),
+    phone: body.phone || get("phone"),
+    location: body.location || get("location") || get("campus") || get("school"),
+    page_url: body.pageUrl || ""
+  };
+}
+
+app.post("/duda-form", async (req, res) => {
+  try {
+    await ensureConfig();
+
+    const b = pickFromDuda(req.body || {});
+    const { first, last } = splitName(b.name || "Website Lead");
+
+    let locationId = chooseLocationIdByText(b.location);
+    if (!locationId && LIVE_LOCATIONS.length) locationId = String(LIVE_LOCATIONS[0].id);
+
+    const lead = {
+      first_name: first,
+      last_name: last,
+      ...(b.phone ? { phone: b.phone } : {}),
+      ...(b.email ? { email: b.email } : {}),
+      source: SOURCE_VALUE,
+      location_id: locationId,
+      location: locationId,
+      locations_select: b.location,
+      notes: `From Duda form – ${b.page_url}`
+    };
+
+    const qs = new URLSearchParams();
+    for (const [k,v] of Object.entries(lead)) if (v) qs.append(k, v);
+
+    console.log("Posting Duda lead to IKS:", qs.toString());
+
+    await axios.post(`${IKS_BASE}/lead/simplified`, qs.toString(), {
+      headers: {
+        Authorization: `Bearer ${IKS_TOKEN}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      timeout: 15000
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error("Duda lead error:", e?.response?.status, e?.response?.data || e.message);
+    return res.status(502).json({ ok: false });
+  }
+});
